@@ -13,6 +13,8 @@ import java.util.Map;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.sql.*;
+import javax.crypto.Cipher;
+import javax.crypto.SecretKey;
 
 class Profile {
 
@@ -26,8 +28,10 @@ class Profile {
     private static Map<Profile, DataOutputStream> mapDos;
     private static ArrayList<Group> allGroups;
     private Lock lock;
+    private SecretKey myKey;
 
-    public Profile(int id, String email, String name, DataOutputStream dos, DataInputStream dis, Statement stmt) {
+    public Profile(int id, String email, String name, DataOutputStream dos, DataInputStream dis, Statement stmt, SecretKey key) {
+        //this.dos.writeUTF( encrypt(Integer.toString(bytes.length)) );
         this.email = email.toLowerCase();
         this.name = name;
         this.id = id;
@@ -35,10 +39,56 @@ class Profile {
         this.dis = dis;
         this.stmt = stmt;
         this.lock = new ReentrantLock();
+        this.myKey=key;
 
         mapDos.put(this, this.dos);
         this.myGroups = new ArrayList<>();
         addMyGroups();
+    }
+    private byte[] decode(String data) {
+        return Base64.getDecoder().decode(data);
+    }
+
+    private String encode(byte[] data) {
+        return Base64.getEncoder().encodeToString(data);
+    }
+    public void writeUTFEncoded(String s) throws IOException{
+        this.dos.writeUTF(encrypt(s));
+    }
+    public void writeEncoded(byte[] b) throws IOException{
+        b=encrypt(new String(Base64.getEncoder().encode(b))).getBytes(); 
+        writeUTFEncoded(Integer.toString(b.length));
+        this.dos.write(b);
+    }
+    private String encrypt(String plainPwd){
+        byte[] outputBytes = new byte[]{};
+        String returnString = "";
+        try {
+            Cipher cipher = Cipher.getInstance("AES");
+            cipher.init(Cipher.ENCRYPT_MODE, myKey);
+            outputBytes = cipher.doFinal(plainPwd.getBytes("utf-8"));
+            if (null != outputBytes)
+		returnString = encode(outputBytes);
+            return returnString.trim();
+        } catch (Exception e) {
+            System.out.println(e);
+        }
+        return new String(outputBytes).trim();
+    }
+
+    private String decrypt(String encryptedPwd) {
+        byte[] outputBytes = new byte[]{};
+        try {
+            Cipher cipher = Cipher.getInstance("AES");
+            cipher.init(Cipher.DECRYPT_MODE, myKey);
+            byte[] inputBytes = decode(encryptedPwd);
+            if (null != inputBytes) {
+                outputBytes = cipher.doFinal(inputBytes);
+            }
+        } catch (Exception e) {
+            System.out.println(e);
+        }
+        return new String(outputBytes).trim();
     }
     public static Map<Profile, DataOutputStream> getMap(){return mapDos;}
     public static void inintaliseProfiles() {
@@ -116,9 +166,9 @@ class Profile {
             if (!entry.getKey().getEmail().equals(this.getEmail())) {
                 try {
                     entry.getKey().lockMe();
-                    entry.getValue().writeUTF("connection@@@" + this.getEmail());
+                    entry.getKey().writeUTFEncoded("connection@@@" + this.getEmail());
                     this.lockMe();
-                    dos.writeUTF("connection@@@" + entry.getKey().getEmail());
+                    writeUTFEncoded("connection@@@" + entry.getKey().getEmail());
                     this.unlockMe();
                     entry.getKey().unlockMe();
                 } catch (Exception e) {
@@ -138,9 +188,10 @@ class Profile {
         byte bytes[] = new byte[0];
         if (!s[0].equals("text")) {
             try {
-                int i = dis.readInt();
+                int i = Integer.parseInt(decrypt(dis.readUTF()));
                 bytes = new byte[i];
                 dis.readFully(bytes);
+                bytes=Base64.getDecoder().decode(decrypt(new String(bytes)));
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -149,10 +200,9 @@ class Profile {
         if (p != null) {
             try {
                 p.lockMe();
-                mapDos.get(p).writeUTF(msg);
+                p.writeUTFEncoded(msg);
                 if (!s[0].equals("text")) {
-                    mapDos.get(p).writeInt(bytes.length);
-                    mapDos.get(p).write(bytes);
+                    p.writeEncoded(bytes);
                 }
                 p.unlockMe();
                 return true;
@@ -189,9 +239,10 @@ class Profile {
         byte bytes[] = new byte[0];
         if (!s[0].equals("text")) {
             try {
-                int i = dis.readInt();
+                int i = Integer.parseInt(decrypt(dis.readUTF()));
                 bytes = new byte[i];
                 dis.readFully(bytes);
+                bytes=Base64.getDecoder().decode(decrypt(new String(bytes)));
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -208,10 +259,9 @@ class Profile {
                         if (this.myGroups.get(i).isConnected(entry.getKey().getId()) && entry.getKey().getId() != this.getId()) {
                             try {
                                 entry.getKey().lockMe();
-                                entry.getValue().writeUTF(msg);
+                                entry.getKey().writeUTFEncoded(msg);
                                 if (!s[0].equals("text")) {
-                                    entry.getValue().writeInt(bytes.length);
-                                    entry.getValue().write(bytes);
+                                    entry.getKey().writeEncoded(bytes);
                                 }
                                 entry.getKey().unlockMe();
                             } catch (IOException e) {
@@ -278,7 +328,7 @@ class Profile {
             Map.Entry<Profile, DataOutputStream> entry = iterator.next();
             entry.getKey().lockMe();
             try {
-                entry.getValue().writeUTF("disconnection@@@" + this.getEmail());
+                entry.getKey().writeUTFEncoded("disconnection@@@" + this.getEmail());
             } catch (IOException e) {
                 e.printStackTrace();
             }
